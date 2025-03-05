@@ -4,7 +4,7 @@ import numpy as np
 ti.init(arch=ti.cpu)
 
 # 기본 설정
-N = 64  # 그리드 크기
+N = 32  # 그리드 크기
 dt = 0.1  # 시간 간격
 visc = 0.0  # 점성 계수 (속도 확산)
 diff = 0.0  # 확산 계수 (밀도 확산)
@@ -111,12 +111,24 @@ def step():
 # 초기화
 init()
 
-# 시각화: 해상도를 512x512로 설정하고, 이미지도 64x64에서 512x512로 업샘플링
+# 시각화: 해상도를 512x512로 설정하고, 이미지도 128x128에서 512x512로 업샘플링
 gui = ti.GUI("Stable Fluid", res=(512, 512))
+scale = 512 // N  # 512 / 128 = 4
+
 while gui.running:
+    # 마우스 이벤트 처리
+    for e in gui.get_events(ti.GUI.PRESS):
+        if e.key == ti.GUI.LMB:  # 왼쪽 마우스 버튼 클릭
+            pos = gui.get_cursor_pos()  # (0~1, 0~1) 범위의 위치
+            x = int(pos[0] * 512)  # 0~512로 변환
+            y = int(pos[1] * 512)  # 0~512로 변환
+            grid_x = x // scale  # 0~128로 변환
+            grid_y = y // scale  # 0~128로 변환
+            if 0 <= grid_x < N and 0 <= grid_y < N:  # 그리드 범위 내 확인
+                density[grid_x, grid_y] += 1.0  # 클릭 위치에 밀도 추가
+
     step()
-    scale = 512 // N  # 512/64 = 8
-    # np.kron을 사용해 각 픽셀을 8x8 블록으로 확장
+    # np.kron을 사용해 각 픽셀을 4x4 블록으로 확장
     img = np.kron(density.to_numpy(), np.ones((scale, scale)))
     gui.set_image(img)
     gui.show()

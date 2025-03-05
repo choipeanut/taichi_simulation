@@ -11,7 +11,7 @@ gravity = ti.Vector([0.0, -9.8])  # 중력 가속도
 max_ball = 100  # 최대 공 개수
 
 # 현재 공의 개수를 저장 (Taichi 필드 사용)
-num_balls = ti.field(dtype=ti.i32, shape=())
+num_balls = ti.field(dtype=ti.i32, shape=()) ##taichi내의 메모리 공간에 할당됨. 커널 내에서 참조하려면 이거로 해야함.
 num_balls[None] = 1  # 초기 공 1개
 
 # 공의 위치와 속도 필드 (최대 max_ball개)

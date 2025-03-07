@@ -4,7 +4,7 @@ import numpy as np
 ti.init(arch=ti.cpu)
 
 # 기본 설정
-N = 32  # 그리드 크기
+N = 512  # 그리드 크기
 dt = 0.1  # 시간 간격
 visc = 0.0  # 점성 계수 (속도 확산)
 diff = 0.0  # 확산 계수 (밀도 확산)
@@ -55,20 +55,20 @@ def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
 def advect(d: ti.template(), d0: ti.template(), vel: ti.template(), dt: ti.f32):
     dt0 = dt * N
     for i, j in ti.ndrange((1, N-1), (1, N-1)):
-        x = i - dt0 * vel[i, j][0]
-        y = j - dt0 * vel[i, j][1]
-        if x < 0.5: x = 0.5
-        if x > N - 1.5: x = N - 1.5
+        x = i - dt0 * vel[i, j][0]      # 역추적
+        y = j - dt0 * vel[i, j][1]      # 역추적
+        if x < 0.5: x = 0.5         # 경계 조건
+        if x > N - 1.5: x = N - 1.5     # 경계 조건
         if y < 0.5: y = 0.5
         if y > N - 1.5: y = N - 1.5
-        i0 = ti.cast(ti.floor(x), ti.i32)
-        i1 = i0 + 1
-        j0 = ti.cast(ti.floor(y), ti.i32)
-        j1 = j0 + 1
-        s1 = x - i0
-        s0 = 1 - s1
-        t1 = y - j0
-        t0 = 1 - t1
+        i0 = ti.cast(ti.floor(x), ti.i32)   # 좌측 하단 격자
+        i1 = i0 + 1             # 우측 상단 격자
+        j0 = ti.cast(ti.floor(y), ti.i32)  # 좌측 하단 격자
+        j1 = j0 + 1             # 우측 상단 격자
+        s1 = x - i0             # x 방향 가중치
+        s0 = 1 - s1             # x 방향 가중치
+        t1 = y - j0             # y 방향 가중치
+        t0 = 1 - t1             # y 방향 가중치
         d[i, j] = s0 * (t0 * d0[i0, j0] + t1 * d0[i0, j1]) + s1 * (t0 * d0[i1, j0] + t1 * d0[i1, j1])
 
 # 투영 (속도 필드 보정)
@@ -111,24 +111,49 @@ def step():
 # 초기화
 init()
 
-# 시각화: 해상도를 512x512로 설정하고, 이미지도 128x128에서 512x512로 업샘플링
+# 시각화
 gui = ti.GUI("Stable Fluid", res=(512, 512))
-scale = 512 // N  # 512 / 128 = 4
+scale = 512 // N  # 512 / 512 = 1 (원래 코드에서 N=512이므로 scale=1)
+radius = 5
+velsource = 5
 
 while gui.running:
     # 마우스 이벤트 처리
-    for e in gui.get_events(ti.GUI.PRESS):
-        if e.key == ti.GUI.LMB:  # 왼쪽 마우스 버튼 클릭
-            pos = gui.get_cursor_pos()  # (0~1, 0~1) 범위의 위치
-            x = int(pos[0] * 512)  # 0~512로 변환
-            y = int(pos[1] * 512)  # 0~512로 변환
-            grid_x = x // scale  # 0~128로 변환
-            grid_y = y // scale  # 0~128로 변환
-            if 0 <= grid_x < N and 0 <= grid_y < N:  # 그리드 범위 내 확인
-                density[grid_x, grid_y] += 1.0  # 클릭 위치에 밀도 추가
-
+    gui.get_event()
+    if gui.is_pressed(ti.GUI.LMB):  # 마우스 왼쪽 버튼이 눌려 있는 동안
+        pos = gui.get_cursor_pos()  # (0~1, 0~1) 범위의 위치
+        
+        grid_x = int(pos[0] * N)  # 0~512로 변환 (그리드 좌표)
+        grid_y = int(pos[1] * N)  # 0~512로 변환 (그리드 좌표)
+        for i in range(grid_x - radius, grid_x + radius + 1):
+            for j in range(grid_y - radius, grid_y + radius + 1):
+                if 0 <= i < N and 0 <= j < N:  # 그리드 범위 내
+                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:  # 원형 범위 내
+                        density[i, j] += 1.0  # 밀도 추가 (값 조절 가능)
+        #print("마우스 위치:", grid_x, grid_y)
+        
+    elif gui.is_pressed(ti.GUI.RMB):   
+        pos = gui.get_cursor_pos()
+        grid_x = int(pos[0] * N)
+        grid_y = int(pos[1] * N)
+        for i,j in ti.ndrange((grid_x - radius, grid_x + radius + 1), (grid_y - radius, grid_y + radius + 1)):
+            if 0 <= i < N and 0 <= j < N:
+                if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
+                    vel[i, j][0] += dt*velsource
+    elif gui.is_pressed(ti.GUI.MMB):   
+        pos = gui.get_cursor_pos()
+        grid_x = int(pos[0] * N)
+        grid_y = int(pos[1] * N)
+        for i,j in ti.ndrange((grid_x - radius, grid_x + radius + 1), (grid_y - radius, grid_y + radius + 1)):
+            if 0 <= i < N and 0 <= j < N:
+                if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
+                    vel[i, j][0] -= dt*velsource
+                    
+        
     step()
-    # np.kron을 사용해 각 픽셀을 4x4 블록으로 확장
-    img = np.kron(density.to_numpy(), np.ones((scale, scale)))
-    gui.set_image(img)
+    # 시각화: 밀도 필드를 numpy 배열로 변환 후 표시
+    density_np = density.to_numpy()
+    # 밀도 값을 0~1로 정규화 (시각적 가독성 개선)
+    #density_np = (density_np - density_np.min()) / (density_np.max() - density_np.min() + 1e-6)
+    gui.set_image(density_np)
     gui.show()

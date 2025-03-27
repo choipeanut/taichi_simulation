@@ -117,6 +117,7 @@ scale = 512 // N  # 512 / 512 = 1 (원래 코드에서 N=512이므로 scale=1)
 radius = 5
 velsource = 5
 
+
 while gui.running:
     # 마우스 이벤트 처리
     gui.get_event()

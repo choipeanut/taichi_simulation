@@ -10,9 +10,9 @@ density_prev = ti.field(dtype=ti.f32, shape=(N, N))
 vel = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 vel_prev = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 source = ti.field(dtype=ti.f32, shape=(N, N))
-diff = 0.0001
+diff = 0.001
 
-@ti.kernel
+@ti.kernel  
 def init_field():
     for i, j in ti.ndrange(N, N):
         density[i, j] = 0.0
@@ -41,13 +41,48 @@ def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
             up = x[i, j+1] if j < N-1 else x[i, j]
             x[i, j] = (x0[i, j] + a * (left + right + down + up)) / (1 + 4 * a)
 
+@ti.kernel
+def advect(x: ti.template(), x0: ti.template(), vel: ti.template(), dt: ti.f32):
+    dt0 = dt * N
+    for i, j in ti.ndrange(N, N):
+        xpos = i - dt0 * vel[i, j][0]
+        ypos = j - dt0 * vel[i, j][1]
+        if(xpos < 0.5): xpos = 0.5
+        if(xpos > N + 0.5): xpos = N + 0.5
+        if(ypos < 0.5): ypos = 0.5
+        if(ypos > N + 0.5): ypos = N + 0.5
+
+        i0 = int(xpos)
+        i1 = i0 + 1
+        j0 = int(ypos)
+        j1 = j0 + 1
+
+        s1 = xpos - i0
+        s0 = 1 - s1
+        t1 = ypos - j0
+        t0 = 1 - t1
+
+        x[i, j] = s0 * (t0 * x0[i0, j0] + t1 * x0[i0, j1]) + s1 * (t0 * x0[i1, j0] + t1 * x0[i1, j1])
+        
+
+def swap(a, b):
+    tmp = a.to_numpy()
+    a.copy_from(b)
+    b.from_numpy(tmp)
+
+
+
+
+
 init_field()
 init_velocity()
 
 def step():
     add_source(density, source, dt)
-    density_prev.copy_from(density)
+    swap(density, density_prev)
     diffuse(density, density_prev, diff, dt)
+    swap(density, density_prev)
+    advect(density, density_prev, vel, dt)
 
 radius = 5
 gui = ti.GUI("Stable Fluid", res=(512, 512))

@@ -20,7 +20,7 @@ def init_field():
 @ti.kernel
 def init_velocity():
     for i, j in ti.ndrange(N, N):
-        if j >= N//4 and j <= 3*N//4:
+        if j >= 49*N//100 and j <= 51*N//100:
             vel[i, j] = ti.Vector([1.0, 0.0])
         else:
             vel[i, j] = ti.Vector([0.0, 0.0])
@@ -85,6 +85,7 @@ def step():
     advect(density, density_prev, vel, dt)
 
 radius = 5
+velsource = 2.0
 gui = ti.GUI("Stable Fluid", res=(512, 512))
 while gui.running:
     gui.get_event()
@@ -98,6 +99,29 @@ while gui.running:
                 if 0 <= i < N and 0 <= j < N:
                     if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
                         source[i, j] = 100.0  # 소스에 값 추가
+    if gui.is_pressed(ti.GUI.MMB):
+        pos = gui.get_cursor_pos()
+        grid_x = int(pos[0] * N)
+        grid_y = int(pos[1] * N)
+        for i in range(grid_x - radius, grid_x + radius + 1):
+            for j in range(grid_y - radius, grid_y + radius + 1):
+                if 0 <= i < N and 0 <= j < N:
+                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
+                        vel[i, j][0] += dt*velsource  # x 방향 양의 속도 (오른쪽)
+    
+    # 오른쪽 마우스 버튼 (RMB): 왼쪽 방향 속도 추가
+    if gui.is_pressed(ti.GUI.RMB):
+        pos = gui.get_cursor_pos()
+        grid_x = int(pos[0] * N)
+        grid_y = int(pos[1] * N)
+        for i in range(grid_x - radius, grid_x + radius + 1):
+            for j in range(grid_y - radius, grid_y + radius + 1):
+                if 0 <= i < N and 0 <= j < N:
+                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
+                        vel[i, j][0] -= velsource  # x 방향 음의 속도 (왼쪽)
+
+                    # 왼쪽 방향 속도
+    
     step()
     density_np = density.to_numpy()
     gui.set_image(density_np)

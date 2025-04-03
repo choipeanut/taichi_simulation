@@ -150,7 +150,15 @@ while gui.running:
                 if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
                     vel[i, j][0] -= dt*velsource
                     
-        
+    
+    
+    if gui.event and gui.event.key == 'a' and gui.event.type == ti.GUI.PRESS:
+        sum = 0.0
+        for i,j in ti.ndrange(N, N):
+            sum += density[i, j]
+        print("sum:", sum)
+        gui.event = None  # 이벤트 처리 후 초기화
+    
     step()
     # 시각화: 밀도 필드를 numpy 배열로 변환 후 표시
     density_np = density.to_numpy()

@@ -14,6 +14,8 @@ diff = 0.00001
 p = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 압력 필드
 div = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 발산 필드
 
+sum = 0.0
+
 @ti.kernel  
 def init_field():
     for i, j in ti.ndrange(N, N):
@@ -26,22 +28,28 @@ def init_velocity():
             vel[i, j] = ti.Vector([1.0, 0.0])
         else:
             vel[i, j] = ti.Vector([0.0, 0.0])
-
+ 
 @ti.kernel
 def add_source(density: ti.template(), source: ti.template(), dt: ti.f32):
     for i, j in density:
         density[i, j] += dt * source[i, j]
 
+# @ti.kernel
+# def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
+#     a = dt * diff * N * N
+#     for k in range(20):
+#         for i, j in ti.ndrange(N, N):
+#             left = x[i-1, j] if i > 0 else x[i, j]
+#             right = x[i+1, j] if i < N-1 else x[i, j]
+#             down = x[i, j-1] if j > 0 else x[i, j]
+#             up = x[i, j+1] if j < N-1 else x[i, j]
+#             x[i, j] = (x0[i, j] + a * (left + right + down + up)) / (1 + 4 * a)
+
 @ti.kernel
 def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
-    a = dt * diff * N * N
-    for k in range(20):
-        for i, j in ti.ndrange(N, N):
-            left = x[i-1, j] if i > 0 else x[i, j]
-            right = x[i+1, j] if i < N-1 else x[i, j]
-            down = x[i, j-1] if j > 0 else x[i, j]
-            up = x[i, j+1] if j < N-1 else x[i, j]
-            x[i, j] = (x0[i, j] + a * (left + right + down + up)) / (1 + 4 * a)
+    a = dt * diff * (N - 2) * (N - 2)
+    for i, j in ti.ndrange((1, N-1), (1, N-1)):
+        x[i, j] = (x0[i, j] + a * (x[i-1, j] + x[i+1, j] + x[i, j-1] + x[i, j+1])) / (1 + 4 * a)
 
 @ti.kernel
 def advect(x: ti.template(), x0: ti.template(), vel: ti.template(), dt: ti.f32):
@@ -67,10 +75,12 @@ def advect(x: ti.template(), x0: ti.template(), vel: ti.template(), dt: ti.f32):
         x[i, j] = s0 * (t0 * x0[i0, j0] + t1 * x0[i0, j1]) + s1 * (t0 * x0[i1, j0] + t1 * x0[i1, j1])
         
 
-def swap(a, b):
-    tmp = a.to_numpy()
-    a.copy_from(b)
-    b.from_numpy(tmp)
+@ti.kernel
+def swap_fields(x: ti.template(), y: ti.template()):
+    for i, j in ti.ndrange(N, N):
+        tmp = x[i, j]
+        x[i, j] = y[i, j]
+        y[i, j] = tmp
 
 @ti.func
 def set_bnd_scalar(x: ti.template()):
@@ -131,58 +141,44 @@ def step():
 
 def dens_step():
     add_source(density, source, dt)
-    swap(density, density_prev)
+    swap_fields(density, density_prev)
     diffuse(density, density_prev, diff, dt)
-    swap(density, density_prev)
+    swap_fields(density, density_prev)
     advect(density, density_prev, vel, dt)
-
+    
 def vel_step():
-    swap(vel, vel_prev)
+    add_source(vel, vel_prev, dt)          # 외부 힘을 현재 속도에 추가
+    #vel_prev.fill(ti.Vector([0.0, 0.0]))    # 외부 힘 필드를 초기화
+    swap_fields(vel, vel_prev)
     diffuse(vel, vel_prev, diff, dt)
-    project(vel, p, density_prev)
-    swap(vel, vel_prev)
+    project(vel, p, div)
+    swap_fields(vel, vel_prev)
     advect(vel, vel_prev, vel, dt)
-    project(vel, p, density_prev)
+    project(vel, p, div)
+
 
 radius = 5
 velsource = 2.0
 gui = ti.GUI("Stable Fluid", res=(512, 512))
 while gui.running:
     gui.get_event()
-    source.fill(0.0)  # 매 프레임마다 소스 초기화
-    if gui.is_pressed(ti.GUI.LMB):
-        pos = gui.get_cursor_pos()
-        grid_x = int(pos[0] * N)
-        grid_y = int(pos[1] * N)
-        for i in range(grid_x - radius, grid_x + radius + 1):
-            for j in range(grid_y - radius, grid_y + radius + 1):
-                if 0 <= i < N and 0 <= j < N:
-                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
-                        source[i, j] = 100.0  # 소스에 값 추가
-    if gui.is_pressed(ti.GUI.MMB):
-        pos = gui.get_cursor_pos()
-        grid_x = int(pos[0] * N)
-        grid_y = int(pos[1] * N)
-        for i in range(grid_x - radius, grid_x + radius + 1):
-            for j in range(grid_y - radius, grid_y + radius + 1):
-                if 0 <= i < N and 0 <= j < N:
-                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
-                        vel[i, j][0] += dt*velsource  # x 방향 양의 속도 (오른쪽)
-    
-    # 오른쪽 마우스 버튼 (RMB): 왼쪽 방향 속도 추가
-    if gui.is_pressed(ti.GUI.RMB):
-        pos = gui.get_cursor_pos()
-        grid_x = int(pos[0] * N)
-        grid_y = int(pos[1] * N)
-        for i in range(grid_x - radius, grid_x + radius + 1):
-            for j in range(grid_y - radius, grid_y + radius + 1):
-                if 0 <= i < N and 0 <= j < N:
-                    if (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
-                        vel[i, j][0] -= velsource  # x 방향 음의 속도 (왼쪽)
+    source.fill(0.0)
+    vel_prev.fill(ti.Vector([0.0, 0.0]))
 
-                    # 왼쪽 방향 속도
-    
+    if gui.is_pressed(ti.GUI.LMB) or gui.is_pressed(ti.GUI.RMB) or gui.is_pressed(ti.GUI.MMB):
+        pos = gui.get_cursor_pos()
+        grid_x = int(pos[0] * N)
+        grid_y = int(pos[1] * N)
+        for i in range(grid_x - radius, grid_x + radius + 1):
+            for j in range(grid_y - radius, grid_y + radius + 1):
+                if 0 <= i < N and 0 <= j < N and (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
+                    if gui.is_pressed(ti.GUI.LMB):
+                        source[i, j] = 100.0
+                    if gui.is_pressed(ti.GUI.MMB):
+                        vel_prev[i, j] = ti.Vector([velsource, 0.0])
+                    if gui.is_pressed(ti.GUI.RMB):
+                        vel_prev[i, j] = ti.Vector([-velsource, 0.0])
+
     step()
-    density_np = density.to_numpy()
-    gui.set_image(density_np)
+    gui.set_image(density)
     gui.show()

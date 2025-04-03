@@ -4,13 +4,15 @@ import numpy as np
 ti.init(arch=ti.cpu)
 
 N = 512
-dt = 0.01
+dt = 0.1
 density = ti.field(dtype=ti.f32, shape=(N, N))
 density_prev = ti.field(dtype=ti.f32, shape=(N, N))
 vel = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 vel_prev = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 source = ti.field(dtype=ti.f32, shape=(N, N))
-diff = 0.001
+diff = 0.00001
+p = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 압력 필드
+div = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 발산 필드
 
 @ti.kernel  
 def init_field():
@@ -70,19 +72,77 @@ def swap(a, b):
     a.copy_from(b)
     b.from_numpy(tmp)
 
+@ti.func
+def set_bnd_scalar(x: ti.template()):
+    for i in range(N):
+        x[i, 0] = 0.0        # 하단 경계
+        x[i, N-1] = 0.0      # 상단 경계
+        x[0, i] = 0.0        # 좌측 경계
+        x[N-1, i] = 0.0      # 우측 경계
 
+@ti.func
+def set_bnd_vel(x: ti.template()):
+    for i in range(N):
+        x[i, 0][1] = -x[i, 1][1]      # 하단 경계: y-속도 반사
+        x[i, N-1][1] = -x[i, N-2][1]  # 상단 경계: y-속도 반사
+        x[0, i][0] = -x[1, i][0]      # 좌측 경계: x-속도 반사
+        x[N-1, i][0] = -x[N-2, i][0]  # 우측 경계: x-속도 반사
 
+@ti.kernel
+def project(vel: ti.template(), p: ti.template(), div: ti.template()):
+    # 발산 계산
+    scale = 0.5 / N  # 그리드 크기에 맞춘 스케일링
+    for i, j in ti.ndrange((1, N-1), (1, N-1)):
+        div[i, j] = -0.5 * (
+            vel[i+1, j][0] - vel[i-1, j][0] + 
+            vel[i, j+1][1] - vel[i, j-1][1]
+        ) * scale
+        p[i, j] = 0.0  # 압력 초기화
 
+    set_bnd_scalar(div)
+    set_bnd_scalar(p)
+
+    # Poisson 방정식 풀이 (Gauss-Seidel 반복)
+    for k in range(20):  # 20회 반복으로 근사
+        for i, j in ti.ndrange((1, N-1), (1, N-1)):
+            p[i, j] = (div[i, j] + p[i-1, j] + p[i+1, j] + p[i, j-1] + p[i, j+1]) / 4.0
+
+    set_bnd_scalar(p)
+
+    # 속도 보정
+    for i, j in ti.ndrange((1, N-1), (1, N-1)):
+        vel[i, j][0] -= (p[i+1, j] - p[i-1, j]) * (N * 0.5)
+        vel[i, j][1] -= (p[i, j+1] - p[i, j-1]) * (N * 0.5)
+
+    set_bnd_vel(vel)
 
 init_field()
 init_velocity()
 
 def step():
+    # add_source(density, source, dt)
+    # swap(density, density_prev)
+    # diffuse(density, density_prev, diff, dt)
+    # swap(density, density_prev)
+    # advect(density, density_prev, vel, dt)
+    vel_step()
+    dens_step()
+    
+
+def dens_step():
     add_source(density, source, dt)
     swap(density, density_prev)
     diffuse(density, density_prev, diff, dt)
     swap(density, density_prev)
     advect(density, density_prev, vel, dt)
+
+def vel_step():
+    swap(vel, vel_prev)
+    diffuse(vel, vel_prev, diff, dt)
+    project(vel, p, density_prev)
+    swap(vel, vel_prev)
+    advect(vel, vel_prev, vel, dt)
+    project(vel, p, density_prev)
 
 radius = 5
 velsource = 2.0

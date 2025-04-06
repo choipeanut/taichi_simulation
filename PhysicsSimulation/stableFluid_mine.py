@@ -3,14 +3,15 @@ import numpy as np
 
 ti.init(arch=ti.cpu)
 
-N = 512
+N = 256
+resolution = 512
 dt = 0.1
 density = ti.field(dtype=ti.f32, shape=(N, N))
 density_prev = ti.field(dtype=ti.f32, shape=(N, N))
 vel = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 vel_prev = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 source = ti.field(dtype=ti.f32, shape=(N, N))
-diff = 0.00001
+diff = 0.0000
 p = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 압력 필드
 div = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 발산 필드
 
@@ -34,22 +35,22 @@ def add_source(density: ti.template(), source: ti.template(), dt: ti.f32):
     for i, j in density:
         density[i, j] += dt * source[i, j]
 
-# @ti.kernel
-# def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
-#     a = dt * diff * N * N
-#     for k in range(20):
-#         for i, j in ti.ndrange(N, N):
-#             left = x[i-1, j] if i > 0 else x[i, j]
-#             right = x[i+1, j] if i < N-1 else x[i, j]
-#             down = x[i, j-1] if j > 0 else x[i, j]
-#             up = x[i, j+1] if j < N-1 else x[i, j]
-#             x[i, j] = (x0[i, j] + a * (left + right + down + up)) / (1 + 4 * a)
-
 @ti.kernel
 def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
-    a = dt * diff * (N - 2) * (N - 2)
-    for i, j in ti.ndrange((1, N-1), (1, N-1)):
-        x[i, j] = (x0[i, j] + a * (x[i-1, j] + x[i+1, j] + x[i, j-1] + x[i, j+1])) / (1 + 4 * a)
+    a = dt * diff * N * N
+    for k in range(1):
+        for i, j in ti.ndrange(N, N):
+            left = x[i-1, j] if i > 0 else x[i, j]
+            right = x[i+1, j] if i < N-1 else x[i, j]
+            down = x[i, j-1] if j > 0 else x[i, j]
+            up = x[i, j+1] if j < N-1 else x[i, j]
+            x[i, j] = (x0[i, j] + a * (left + right + down + up)) / (1 + 4 * a)
+
+# @ti.kernel
+# def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
+#     a = dt * diff * (N - 2) * (N - 2)
+#     for i, j in ti.ndrange((1, N-1), (1, N-1)):
+#         x[i, j] = (x0[i, j] + a * (x[i-1, j] + x[i+1, j] + x[i, j-1] + x[i, j+1])) / (1 + 4 * a)
 
 @ti.kernel
 def advect(x: ti.template(), x0: ti.template(), vel: ti.template(), dt: ti.f32):
@@ -159,7 +160,7 @@ def vel_step():
 
 radius = 5
 velsource = 2.0
-gui = ti.GUI("Stable Fluid", res=(512, 512))
+gui = ti.GUI("Stable Fluid", res=(resolution, resolution))
 while gui.running:
     gui.get_event()
     source.fill(0.0)
@@ -179,6 +180,10 @@ while gui.running:
                     if gui.is_pressed(ti.GUI.RMB):
                         vel_prev[i, j] = ti.Vector([-velsource, 0.0])
 
+
     step()
-    gui.set_image(density)
+    mag = resolution//N
+    density_img = np.kron(density.to_numpy(), np.ones((mag, mag)))
+    gui.set_image(density_img)
+    
     gui.show()

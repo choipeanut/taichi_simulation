@@ -11,22 +11,25 @@ density_prev = ti.field(dtype=ti.f32, shape=(N, N))
 vel = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 vel_prev = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))
 source = ti.field(dtype=ti.f32, shape=(N, N))
-diff = 0.0000
+diff = 0.00001
+viscosity = 0.0001 ##0.0001 ~ 0.00001
 p = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 압력 필드
 div = ti.field(dtype=ti.f32, shape=(N, N))  # 추가: 발산 필드
-
+curl = 3.0
 sum = 0.0
 
 @ti.kernel  
 def init_field():
     for i, j in ti.ndrange(N, N):
         density[i, j] = 0.0
+        if (i - N//2)**2 + (j - N//2)**2 < 100:
+            density[i, j] = 1.0
 
 @ti.kernel
 def init_velocity():
     for i, j in ti.ndrange(N, N):
         if j >= 49*N//100 and j <= 51*N//100:
-            vel[i, j] = ti.Vector([1.0, 0.0])
+            vel[i, j] = ti.Vector([0.0, 0.0])
         else:
             vel[i, j] = ti.Vector([0.0, 0.0])
  
@@ -38,7 +41,7 @@ def add_source(density: ti.template(), source: ti.template(), dt: ti.f32):
 @ti.kernel
 def diffuse(x: ti.template(), x0: ti.template(), diff: ti.f32, dt: ti.f32):
     a = dt * diff * N * N
-    for k in range(1):
+    for k in range(20):
         for i, j in ti.ndrange(N, N):
             left = x[i-1, j] if i > 0 else x[i, j]
             right = x[i+1, j] if i < N-1 else x[i, j]
@@ -107,7 +110,7 @@ def project(vel: ti.template(), p: ti.template(), div: ti.template()):
         div[i, j] = -0.5 * (
             vel[i+1, j][0] - vel[i-1, j][0] + 
             vel[i, j+1][1] - vel[i, j-1][1]
-        ) * scale
+        ) * scale * curl
         p[i, j] = 0.0  # 압력 초기화
 
     set_bnd_scalar(div)
@@ -151,7 +154,7 @@ def vel_step():
     add_source(vel, vel_prev, dt)          # 외부 힘을 현재 속도에 추가
     #vel_prev.fill(ti.Vector([0.0, 0.0]))    # 외부 힘 필드를 초기화
     swap_fields(vel, vel_prev)
-    diffuse(vel, vel_prev, diff, dt)
+    diffuse(vel, vel_prev, viscosity, dt)
     project(vel, p, div)
     swap_fields(vel, vel_prev)
     advect(vel, vel_prev, vel, dt)
@@ -174,7 +177,7 @@ while gui.running:
             for j in range(grid_y - radius, grid_y + radius + 1):
                 if 0 <= i < N and 0 <= j < N and (i - grid_x)**2 + (j - grid_y)**2 <= radius**2:
                     if gui.is_pressed(ti.GUI.LMB):
-                        source[i, j] = 100.0
+                        source[i, j] = 1.0
                     if gui.is_pressed(ti.GUI.MMB):
                         vel_prev[i, j] = ti.Vector([velsource, 0.0])
                     if gui.is_pressed(ti.GUI.RMB):

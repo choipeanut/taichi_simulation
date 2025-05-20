@@ -3,7 +3,7 @@ import numpy as np
 
 ti.init(arch=ti.gpu)  # GPU 백엔드로 실행
 
-N = 128
+N = 256
 resolution = 512
 dt = 0.1
 density = ti.field(dtype=ti.f32, shape=(N, N))
@@ -208,17 +208,17 @@ def project(vel, p, p_prev, div):
     correct_vel(vel, p)
 
 ##  without vorticity confinement
-# def vel_step():
-#     add_source(vel, vel_prev, dt)
-#     swap_fields(vel, vel_prev)
-#     diffuse(vel, vel_prev, viscosity, dt)
-#     project(vel, p, p_prev, div)
-#     swap_fields(vel, vel_prev)
-#     advect(vel, vel_prev, vel, dt)
-#     project(vel, p, p_prev, div)
+def vel_step():
+    add_source(vel, vel_prev, dt)
+    swap_fields(vel, vel_prev)
+    diffuse(vel, vel_prev, viscosity, dt)
+    project(vel, p, p_prev, div)
+    swap_fields(vel, vel_prev)
+    advect(vel, vel_prev, vel, dt)
+    project(vel, p, p_prev, div)
 
 ##  with vorticity confinement
-def vel_step():
+def vel_step_vc():
     add_source(vel, vel_prev, dt)
     swap_fields(vel, vel_prev)
     diffuse(vel, vel_prev, viscosity, dt)
@@ -256,15 +256,27 @@ eps_slider.value = epsilon
 curl_slider = gui.slider("curl", 0.0, 5.0)
 curl_slider.value = curl
 
+use_vorticity_confinement = True  # Vorticity confinement 토글 플래그 추가
+vort_button = gui.button("Toggle Vorticity Confinement")
+
 while gui.running:
-    gui.get_event()
+    for e in gui.get_events(gui.PRESS):
+        if e.key == vort_button:
+            use_vorticity_confinement = not use_vorticity_confinement
+            
     source.fill(0.0)
     vel_prev.fill(ti.Vector([0.0, 0.0]))
+
+
 
     diff = diff_slider.value
     viscosity = visc_slider.value
     epsilon = eps_slider.value
     curl = curl_slider.value  # 발산 계산에 영향
+
+    # if gui.button("Toggle Vorticity Confinement"):
+    #     use_vorticity_confinement = not use_vorticity_confinement
+    # gui.text(f"Vorticity Confinement: {'ON' if use_vorticity_confinement else 'OFF'}",pos=(0.01, 0.95), color=0xFFFFFF)
 
     if gui.is_pressed(ti.GUI.LMB) or gui.is_pressed(ti.GUI.RMB) or gui.is_pressed(ti.GUI.MMB):
         pos = gui.get_cursor_pos()
@@ -276,7 +288,11 @@ while gui.running:
                     #if gui.is_pressed(ti.GUI.MMB): vel_prev[i, j] = ti.Vector([velsource, 0.0])
                     if gui.is_pressed(ti.GUI.RMB): vel_prev[i, j] = ti.Vector([0.0, velsource])
 
-    vel_step()
+    
+    if use_vorticity_confinement:
+        vel_step_vc()
+    else:
+        vel_step()
     dens_step()
     # density_img = np.kron(density.to_numpy(), np.ones((resolution//N, resolution//N)))
     # gui.set_image(density_img)

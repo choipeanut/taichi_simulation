@@ -3,7 +3,7 @@ import numpy as np
 
 ti.init(arch=ti.gpu)  # GPU 백엔드로 실행
 
-N = 256
+N = 128
 resolution = 512
 dt = 0.1
 density = ti.field(dtype=ti.f32, shape=(N, N))
@@ -21,18 +21,21 @@ vort_force = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))  # 힘 필드
 epsilon = 3.0  # vorticity confinement의 강도
 curl = 1.0
 
+fire_img = ti.Vector.field(3, dtype=ti.f32, shape=(N, N))
+
+
 @ti.kernel  
 def init_field():
     for i, j in ti.ndrange(N, N):
         density[i, j] = 0.0
         if (i - N//2)**2 + (j - N//2)**2 < 100:
-            density[i, j] = 1.0
+            density[i, j] = 0.0
 
 @ti.kernel
 def init_velocity():
     for i, j in ti.ndrange(N, N):
         if (i - N//2)**2 + (j - N//2)**2 < 50:
-            vel[i, j] = ti.Vector([1.0, 0.0])
+            vel[i, j] = ti.Vector([0.0, 0.0])
         else:
             vel[i, j] = ti.Vector([0.0, 0.0])
 
@@ -147,6 +150,48 @@ def add_force(vel: ti.template(), force: ti.template(), dt: ti.f32):
     for i, j in ti.ndrange(N, N):
         vel[i, j] += dt * force[i, j]
 
+def fire_colormap(density):
+    """
+    density: 0~1 범위의 2D numpy array
+    returns: (H, W, 3) RGB image, values in 0~1
+    """
+    h, w = density.shape
+    img = np.zeros((h, w, 3), dtype=np.float32)
+
+    # 불 느낌 색상 맵핑: 검정 → 빨강 → 주황 → 노랑 → 흰색
+    for i in range(h):
+        for j in range(w):
+            d = density[i, j]
+            if d < 0.2:
+                img[i, j] = [d * 5, 0, 0]  # 검정 → 빨강
+            elif d < 0.4:
+                img[i, j] = [1.0, (d - 0.2) * 5, 0]  # 빨강 → 주황
+            elif d < 0.7:
+                img[i, j] = [1.0, 1.0, (d - 0.4) * 3.3]  # 주황 → 노랑
+            else:
+                val = min(1.0, (d - 0.7) * 3.3)
+                img[i, j] = [1.0, 1.0, val]  # 노랑 → 거의 흰색
+
+    return img
+
+@ti.kernel
+def compute_fire_color():
+    for i, j in ti.ndrange(N, N):
+        d = density[i, j]
+        r, g, b = 0.0, 0.0, 0.0
+        if d < 0.2:
+            r = d * 5
+        elif d < 0.4:
+            r = 1.0
+            g = (d - 0.2) * 5
+        elif d < 0.7:
+            r = 1.0
+            g = 1.0
+            b = (d - 0.4) * 3.3
+        else:
+            r = g = 1.0
+            b = min(1.0, (d - 0.7) * 3.3)
+        fire_img[i, j] = ti.Vector([r, g, b])
 
 
 # step 함수들
@@ -162,7 +207,7 @@ def project(vel, p, p_prev, div):
         pressure_jacobi(p, p_prev, div)
     correct_vel(vel, p)
 
-
+##  without vorticity confinement
 # def vel_step():
 #     add_source(vel, vel_prev, dt)
 #     swap_fields(vel, vel_prev)
@@ -172,6 +217,7 @@ def project(vel, p, p_prev, div):
 #     advect(vel, vel_prev, vel, dt)
 #     project(vel, p, p_prev, div)
 
+##  with vorticity confinement
 def vel_step():
     add_source(vel, vel_prev, dt)
     swap_fields(vel, vel_prev)
@@ -197,10 +243,28 @@ radius = 5
 velsource = 2.0
 
 gui = ti.GUI("Stable Fluid (Jacobi)", res=(resolution, resolution))
+
+diff_slider = gui.slider("diff", 0.0, 0.01)
+diff_slider.value = diff
+
+visc_slider = gui.slider("viscosity", 0.0, 0.01)
+visc_slider.value = viscosity
+
+eps_slider = gui.slider("epsilon", 0.0, 10.0)
+eps_slider.value = epsilon
+
+curl_slider = gui.slider("curl", 0.0, 5.0)
+curl_slider.value = curl
+
 while gui.running:
     gui.get_event()
     source.fill(0.0)
     vel_prev.fill(ti.Vector([0.0, 0.0]))
+
+    diff = diff_slider.value
+    viscosity = visc_slider.value
+    epsilon = eps_slider.value
+    curl = curl_slider.value  # 발산 계산에 영향
 
     if gui.is_pressed(ti.GUI.LMB) or gui.is_pressed(ti.GUI.RMB) or gui.is_pressed(ti.GUI.MMB):
         pos = gui.get_cursor_pos()
@@ -208,12 +272,23 @@ while gui.running:
         for i in range(gx - radius, gx + radius + 1):
             for j in range(gy - radius, gy + radius + 1):
                 if 0 <= i < N and 0 <= j < N and (i-gx)**2 + (j-gy)**2 <= radius**2:
-                    if gui.is_pressed(ti.GUI.LMB): source[i, j] = 1.0
-                    if gui.is_pressed(ti.GUI.MMB): vel_prev[i, j] = ti.Vector([velsource, 0.0])
-                    if gui.is_pressed(ti.GUI.RMB): vel_prev[i, j] = ti.Vector([-velsource, 0.0])
+                    if gui.is_pressed(ti.GUI.MMB): source[i, j] = 1.0
+                    #if gui.is_pressed(ti.GUI.MMB): vel_prev[i, j] = ti.Vector([velsource, 0.0])
+                    if gui.is_pressed(ti.GUI.RMB): vel_prev[i, j] = ti.Vector([0.0, velsource])
 
     vel_step()
     dens_step()
-    density_img = np.kron(density.to_numpy(), np.ones((resolution//N, resolution//N)))
-    gui.set_image(density_img)
+    # density_img = np.kron(density.to_numpy(), np.ones((resolution//N, resolution//N)))
+    # gui.set_image(density_img)
+    # density_np = density.to_numpy()
+    # density_resized = np.kron(density_np, np.ones((resolution//N, resolution//N)))
+    # density_rgb = fire_colormap(density_resized)
+    # gui.set_image(density_rgb)
+
+    compute_fire_color()  # 매 프레임 RGB 계산
+    rgb_np = fire_img.to_numpy()
+    rgb_resized = np.kron(rgb_np, np.ones((resolution//N, resolution//N, 1)))
+    gui.set_image(rgb_resized)
+
+
     gui.show()

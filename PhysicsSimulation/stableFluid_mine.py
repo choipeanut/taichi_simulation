@@ -16,6 +16,9 @@ viscosity = 0.0001
 p = ti.field(dtype=ti.f32, shape=(N, N))  # 압력 필드
 p_prev = ti.field(dtype=ti.f32, shape=(N, N))  # Jacobi용 이전 압력 필드 
 div = ti.field(dtype=ti.f32, shape=(N, N))  # 발산 필드
+vort = ti.field(dtype=ti.f32, shape=(N, N))       # 스칼라 vorticity
+vort_force = ti.Vector.field(2, dtype=ti.f32, shape=(N, N))  # 힘 필드
+epsilon = 3.0  # vorticity confinement의 강도
 curl = 1.0
 
 @ti.kernel  
@@ -116,6 +119,36 @@ def correct_vel(vel: ti.template(), p: ti.template()):
         vel[i, j][1] -= (p[i, j+1] - p[i, j-1]) * (N * 0.5)
     set_bnd_vel(vel)
 
+@ti.kernel
+def compute_vorticity():
+    for i, j in ti.ndrange((1, N-1), (1, N-1)):
+        dx = vel[i, j+1][0] - vel[i, j-1][0]
+        dy = vel[i+1, j][1] - vel[i-1, j][1]
+        vort[i, j] = 0.5 * (dx - dy) ## dy-dx가 수학적으로 맞음. 왜 0.5?
+
+@ti.kernel
+def apply_vorticity_confinement(epsilon: ti.f32):
+    for i, j in ti.ndrange((1, N-1), (1, N-1)):
+        # ∇|ω| 계산 (vorticity magnitude의 gradient)
+        dw_dx = abs(vort[i+1, j]) - abs(vort[i-1, j])
+        dw_dy = abs(vort[i, j+1]) - abs(vort[i, j-1])
+        length = ti.sqrt(dw_dx**2 + dw_dy**2) + 1e-5
+        Nv = ti.Vector([dw_dx, dw_dy]) / length
+
+        # N x ω (2D에서 결과는 벡터)
+        vort_dir = ti.Vector([0.0, 0.0])
+        vort_dir[0] = -Nv[1] * vort[i, j]
+        vort_dir[1] = Nv[0] * vort[i, j]
+
+        vort_force[i, j] = epsilon * vort_dir
+
+@ti.kernel
+def add_force(vel: ti.template(), force: ti.template(), dt: ti.f32):
+    for i, j in ti.ndrange(N, N):
+        vel[i, j] += dt * force[i, j]
+
+
+
 # step 함수들
 init_field()
 init_velocity()
@@ -130,6 +163,15 @@ def project(vel, p, p_prev, div):
     correct_vel(vel, p)
 
 
+# def vel_step():
+#     add_source(vel, vel_prev, dt)
+#     swap_fields(vel, vel_prev)
+#     diffuse(vel, vel_prev, viscosity, dt)
+#     project(vel, p, p_prev, div)
+#     swap_fields(vel, vel_prev)
+#     advect(vel, vel_prev, vel, dt)
+#     project(vel, p, p_prev, div)
+
 def vel_step():
     add_source(vel, vel_prev, dt)
     swap_fields(vel, vel_prev)
@@ -137,6 +179,9 @@ def vel_step():
     project(vel, p, p_prev, div)
     swap_fields(vel, vel_prev)
     advect(vel, vel_prev, vel, dt)
+    compute_vorticity()
+    apply_vorticity_confinement(epsilon)  # ε 값은 조정 가능
+    add_force(vel, vort_force, dt)
     project(vel, p, p_prev, div)
 
 
